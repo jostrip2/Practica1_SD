@@ -10,9 +10,9 @@ numWorkers = 1
 matriuA = []
 matriuB = []
 matriuC = []
-m = 2           # files de la matriu A
-n = 2           # columnes de la matriu A // files de la matriu B
-l = 2           # files de la matriu B
+m = 10           # files de la matriu A
+n = 10           # columnes de la matriu A // files de la matriu B
+l = 10           # columnes de la matriu B
 
 
 
@@ -22,7 +22,7 @@ def inicialitzar(bucket, ibm_cos):
     files = []
     for i in range(numWorkers):
         if (i < numWorkers - 1):
-            rang = m/numWorkers
+            rang = int(m/numWorkers)
         else:
             rang = m - numFiles
 
@@ -31,14 +31,14 @@ def inicialitzar(bucket, ibm_cos):
             numFiles += 1
 
         partSer = pickle.dumps(files, pickle.HIGHEST_PROTOCOL)
-        ibm_cos.put_object(Bucket=bucket, Key="A"+str(numWorkers), Body=partSer)
+        ibm_cos.put_object(Bucket=bucket, Key="A"+str(i), Body=partSer)
     
     # Inicialitzar i guardar matriu B
     numCol = 0
     col = []
     for i in range(numWorkers):
         if (i < numWorkers - 1):
-            rang = l/numWorkers
+            rang = int(l/numWorkers)
         else:
             rang = l - numCol
 
@@ -47,12 +47,12 @@ def inicialitzar(bucket, ibm_cos):
             numCol += 1
 
         partSer = pickle.dumps(col, pickle.HIGHEST_PROTOCOL)
-        ibm_cos.put_object(Bucket=bucket, Key="B"+str(numWorkers), Body=partSer)
+        ibm_cos.put_object(Bucket=bucket, Key="B"+str(i), Body=partSer)
 
     
 
 #def multiplicar(bucket, ibm_cos):
-
+# deserialitzar --> part = pickle.loads(get)
 
 #def reduir():
 

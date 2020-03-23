@@ -7,9 +7,6 @@ MAX_WORKERS = 100   # numero de workers maxim
 
 numWorkers = 1
 
-matriuA = []
-matriuB = []
-matriuC = []
 m = 2           # files de la matriu A
 n = 2           # columnes de la matriu A // files de la matriu B
 l = 2           # columnes de la matriu B
@@ -81,25 +78,36 @@ def multiplicar(bucket, ibm_cos, id):
 #def reduir():
 
 
+def test(bucket, ibm_cos):
+    chunkA = ibm_cos.get_object(Bucket=bucket, Key='A0')['Body'].read()
+    chunkB = ibm_cos.get_object(Bucket=bucket, Key='B0')['Body'].read()
+    return [chunkA, chunkB]
+
+
 if __name__ == '__main__':
     numWorkers = int(sys.argv[1])
-    if numWorkers <= MAX_WORKERS:
-        if numWorkers <= m*n:
-            ibmcf = pywren.ibm_cf_executor()
-            ibmcf.call_async(inicialitzar, 'sd-python')
-            interdata = ['sd-python']
-            if(numWorkers == 1):
-                ibmcf.map(multiplicar, interdata)
+    if numWorkers > 0:
+        if numWorkers <= MAX_WORKERS:
+            if numWorkers <= m*n:
+                ibmcf = pywren.ibm_cf_executor()
+                ibmcf.call_async(inicialitzar, 'sd-python')
+                interdata = ['sd-python']
+                ibmcf.call_async(test, 'sd-python')
+                '''
+                if(numWorkers == 1):
+                    ibmcf.map(multiplicar, interdata)
+                else:
+                    ibmcf.map_reduce(multiplicar, interdata, reduir)
+                '''
+                print(ibmcf.get_result())
+                
+                ibmcf.clean()
             else:
-                ibmcf.map_reduce(multiplicar, interdata, reduir)
-
-            print(ibmcf.get_result())
-            
-            ibmcf.clean()
+                print("El nombre de workers ha de ser inferior a "+str(m*n))
         else:
-            print("El nombre de workers ha de ser inferior a "+str(m*n))
+            print("El nombre de workers ha de ser inferior a 100")
     else:
-        print("El nombre de workers ha de ser inferior a 100")
+        print("El nombre de workers ha de ser superior a 0")
     
     
 

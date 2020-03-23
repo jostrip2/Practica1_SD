@@ -2,6 +2,7 @@ import pywren_ibm_cloud as pywren
 import numpy as np
 import sys
 import pickle
+import marshal
 
 MAX_WORKERS = 100   # numero de workers maxim
 
@@ -22,12 +23,12 @@ def inicialitzar(bucket, ibm_cos):
             rang = int(m/numWorkers)
         else:
             rang = m - numFiles
+               
+        files = np.append(files, np.random.randint(10, size=(rang, n)))     # crear files
+        numFiles += rang
 
-        for j in range(rang):               # crear files
-            np.append(files, np.random.randint(10, size=n))
-            numFiles += 1
-
-        partSer = pickle.dumps(files, pickle.HIGHEST_PROTOCOL)          # serialitzar i guardar
+        partSer = marshal.dumps(files.astype(int))
+        #partSer = pickle.dumps(files, pickle.HIGHEST_PROTOCOL)          # serialitzar i guardar
         ibm_cos.put_object(Bucket=bucket, Key='A'+str(i), Body=partSer)
     
     # Inicialitzar i guardar matriu B
@@ -38,13 +39,15 @@ def inicialitzar(bucket, ibm_cos):
             rang = int(l/numWorkers)
         else:
             rang = l - numCol
+             
+        col = np.append(col, np.random.randint(10, size=(rang,n)))         # crear columnes 
+        numCol += rang
 
-        for j in range(rang):               # crear columnes 
-            np.append(col, np.random.randint(10, size=n))
-            numCol += 1
-
-        partSer = pickle.dumps(col, pickle.HIGHEST_PROTOCOL)            # serialitzar i guardar
+        partSer = marshal.dumps(col.astype(int))
+        #partSer = pickle.dumps(col, pickle.HIGHEST_PROTOCOL)            # serialitzar i guardar
         ibm_cos.put_object(Bucket=bucket, Key='B'+str(i), Body=partSer)
+
+    return [files.astype(int), col.astype(int)]
 
     
 
@@ -79,35 +82,42 @@ def multiplicar(bucket, ibm_cos, id):
 
 
 def test(bucket, ibm_cos):
-    chunkA = ibm_cos.get_object(Bucket=bucket, Key='A0')['Body'].read()
-    chunkB = ibm_cos.get_object(Bucket=bucket, Key='B0')['Body'].read()
-    return [chunkA, chunkB]
+    chunkASer = ibm_cos.get_object(Bucket=bucket, Key='A0')['Body'].read()
+    chunkBSer = ibm_cos.get_object(Bucket=bucket, Key='B0')['Body'].read()
+    chunkA = marshal.loads(chunkASer)
+    chunkB = marshal.loads(chunkBSer)
+    print(str(chunkA)+'\t'+str(chunkB))
+    #return [chunkA, chunkB]
 
 
 if __name__ == '__main__':
-    numWorkers = int(sys.argv[1])
-    if numWorkers > 0:
-        if numWorkers <= MAX_WORKERS:
-            if numWorkers <= m*n:
-                ibmcf = pywren.ibm_cf_executor()
-                ibmcf.call_async(inicialitzar, 'sd-python')
-                interdata = ['sd-python']
-                ibmcf.call_async(test, 'sd-python')
-                '''
-                if(numWorkers == 1):
-                    ibmcf.map(multiplicar, interdata)
+    try:
+        numWorkers = int(sys.argv[1])
+        if numWorkers > 0:
+            if numWorkers <= MAX_WORKERS:
+                if numWorkers <= m*n:
+                    ibmcf = pywren.ibm_cf_executor()
+                    ibmcf.call_async(inicialitzar, 'sd-python')
+                    interdata = ['sd-python']
+                    ibmcf.call_async(test, 'sd-python')
+                    '''
+                    if(numWorkers == 1):
+                        ibmcf.map(multiplicar, interdata)
+                    else:
+                        ibmcf.map_reduce(multiplicar, interdata, reduir)
+                    '''
+                    print(ibmcf.get_result())
+                    
+                    ibmcf.clean()
                 else:
-                    ibmcf.map_reduce(multiplicar, interdata, reduir)
-                '''
-                print(ibmcf.get_result())
-                
-                ibmcf.clean()
+                    print("El nombre de workers ha de ser inferior a "+str(m*n))
             else:
-                print("El nombre de workers ha de ser inferior a "+str(m*n))
+                print("El nombre de workers ha de ser inferior a 100")
         else:
-            print("El nombre de workers ha de ser inferior a 100")
-    else:
-        print("El nombre de workers ha de ser superior a 0")
+            print("El nombre de workers ha de ser superior a 0")
+    except IndexError:
+        print("S'ha d'indicar el nombre de workers")
+    
     
     
 

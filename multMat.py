@@ -11,13 +11,13 @@ m = 2           # files de la matriu A
 n = 2           # columnes de la matriu A // files de la matriu B
 l = 2           # columnes de la matriu B
 
-
+numWorkers = 1
 
 def inicialitzar(bucket, workers, ibm_cos):
     # Inicialitzar i guardar matriu A
     numFiles = 0
     for i in range(workers):
-        if (i < workers - 1):            # trobar quantes columnes crear
+        if (i < workers - 1):            # trobar quantes files crear
             rang = int(m/workers)
         else:
             rang = m - numFiles
@@ -31,7 +31,7 @@ def inicialitzar(bucket, workers, ibm_cos):
         numFiles += rang
 
         partSer = pickle.dumps(matA)          # serialitzar i guardar
-        ibm_cos.put_object(Bucket=bucket, Key='A'+str(i), Body=partSer)
+        ibm_cos.put_object(Bucket=bucket, Key='A'+str(i+1), Body=partSer)
     
     # Inicialitzar i guardar matriu B
     numCol = 0
@@ -42,16 +42,14 @@ def inicialitzar(bucket, workers, ibm_cos):
             rang = l - numCol
                      
         matB = []
-        for j in range(n):                   # crear columnes
+        for j in range(rang):                   # crear columnes
             matB.append([])
-            for _ in range(rang):
+            for _ in range(n):
                 matB[j].append(random.randint(0, 10)) 
         numCol += rang
 
         partSer = pickle.dumps(matB)            # serialitzar i guardar
-        ibm_cos.put_object(Bucket=bucket, Key='B'+str(i), Body=partSer)
-
-    return [matA, matB]
+        ibm_cos.put_object(Bucket=bucket, Key='B'+str(i+1), Body=partSer)
 
     
 
@@ -82,11 +80,18 @@ def multiplicar(num, bucket, ibm_cos):
 
 #def reduir():
 
+def getMat(bucket, ibm_cos):
+    parts = []
+    for i in range(numWorkers):
+        part = pickle.loads(ibm_cos.get_object(Bucket=bucket, Key='A'+str(i+1))['Body'].read())
+        for j in part:
+            parts.append(j)
 
-def test(bucket, ibm_cos):
-    chunkCSer = ibm_cos.get_object(Bucket=bucket, Key='C00')['Body'].read()
-    chunkC = pickle.loads(chunkCSer)
-    return chunkC 
+    for i in range(numWorkers):
+        part = pickle.loads(ibm_cos.get_object(Bucket=bucket, Key='B'+str(i+1))['Body'].read())
+        for j in part:
+            parts.append(j)
+    return parts
 
 
 if __name__ == '__main__':
@@ -95,35 +100,33 @@ if __name__ == '__main__':
     except IndexError:
         print("S'ha d'indicar el nombre de workers")
     else:
-        if numWorkers > 0:
-            if numWorkers <= MAX_WORKERS:
-                if numWorkers <= m*n:
-                    ibmcf = pywren.ibm_cf_executor()
-                    params = {'bucket': 'sd-python', 'workers': numWorkers}
-                    ibmcf.call_async(inicialitzar, params)
-                    interdata = list(range(numWorkers))
-                    if(numWorkers == 1):
-                        ibmcf.map(multiplicar, interdata, extra_params=['sd-python'])
-                    '''
-                    else:
-                        ibmcf.map_reduce(multiplicar, interdata, reduir)
-                    '''
-                    #ibmcf.call_async(test, 'sd-python')
-                    print(ibmcf.get_result())
-                    
-                    ibmcf.clean()
+        if (numWorkers > 0 and numWorkers <= MAX_WORKERS):
+            if(numWorkers <= m and numWorkers <= l or numWorkers == m*l):
+                ibmcf = pywren.ibm_cf_executor()
+                params = {'bucket': 'sd-python', 'workers': numWorkers}
+                ibmcf.call_async(inicialitzar, params)
+                ibmcf.call_async(getMat, 'sd-python')
+
+                if(numWorkers == 1):
+                    interdata = list(range(numWorkers)+1)
+                    ibmcf.map(multiplicar, interdata, extra_params=['sd-python'])
+                elif(numWorkers <= m and numWorkers <= l):
+                    # TODO Calcular interdata w <m i <l
+                    for 
+                    ibmcf.map_reduce(multiplicar, interdata, reduir)
                 else:
-                    print("El nombre de workers ha de ser inferior a "+str(m*n))
+                    # TODO Calcular interdata w = m*l
+                    for 
+                    ibmcf.map_reduce(multiplicar, interdata, reduir)
+
+                result = ibmcf.get_result()
+                matA = result[:2]
+                matB = result[2:]
+                print(matA)
+                print(matB)
+                
+                ibmcf.clean()
             else:
-                print("El nombre de workers ha de ser inferior a 100")
+                print("El nombre de workers ha de ser inferior o igual a "+str(m)+" i "+str(l))
         else:
-            print("El nombre de workers ha de ser superior a 0")
-    
-    
-    
-    
-
-
-
-#def funct (par, par, ibm_cos)  # ibm_cos fa una instancia del cos
-
+            print("El nombre de workers ha de ser entre 0 i "+str(MAX_WORKERS))

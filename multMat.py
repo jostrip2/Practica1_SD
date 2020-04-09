@@ -8,7 +8,7 @@ MAX_WORKERS = 100   # numero de workers maxim
 
 m = 4           # files de la matriu A
 n = 4           # columnes de la matriu A // files de la matriu B
-l = 4           # columnes de la matriu B
+l = 2           # columnes de la matriu B
 
 numWorkers = 1
 
@@ -32,7 +32,6 @@ def inicialitzar(bucket, workers, ibm_cos):
             chunkA = matA[iniciA:finalA]
             partSer = pickle.dumps(chunkA)          # serialitzar i guardar
             ibm_cos.put_object(Bucket=bucket, Key='A'+str(i+1), Body=partSer)
-
     else:
         for i in range(m):
             chunkA = matA[i]
@@ -52,10 +51,9 @@ def inicialitzar(bucket, workers, ibm_cos):
             else:
                 finalB = (i+1) * partB
             
-            chunkB = np.array(matB[:, iniciB:finalB])
+            chunkB = matB[:, iniciB:finalB]
             partSer = pickle.dumps(chunkB)          # serialitzar i guardar
             ibm_cos.put_object(Bucket=bucket, Key='B'+str(i+1), Body=partSer)
-
     else:
         for i in range(l):
             chunkB = matB[:, i]
@@ -67,53 +65,76 @@ def inicialitzar(bucket, workers, ibm_cos):
     
 def multiplicar(files, col, bucket, ibm_cos):
     
-    chunksA = [] 
+    matA = [] 
+    chunksA = []
+    chunksB = []
+    matB = []
     if numWorkers == 1:
         chunkASer = ibm_cos.get_object(Bucket=bucket, Key='A1')['Body'].read()
-        chunksA = pickle.loads(chunkASer)
+        matA = pickle.loads(chunkASer)
         chunkBSer = ibm_cos.get_object(Bucket=bucket, Key='B1')['Body'].read()
-        chunksB = pickle.loads(chunkBSer)
-        chunksB = np.array(chunksB)
+        matB = pickle.loads(chunkBSer)
 
     elif numWorkers <= m:
         # agafar i desserialitzar chunks de A 
         chunkASer = ibm_cos.get_object(Bucket=bucket, Key='A'+str(files))['Body'].read()
-        chunksA.append(pickle.loads(chunkASer))
+        matA.append(pickle.loads(chunkASer))
 
         # agafar i desserialitzar chunks de B
-        chunksB = []
         for i in col:
             chunkBSer = ibm_cos.get_object(Bucket=bucket, Key='B'+str(i))['Body'].read()
-            chunksB.append(pickle.loads(chunkBSer))
-        chunksB = np.array(chunksB)
-        chunksB = np.transpose(chunksB)
+            chunksB = pickle.loads(chunkBSer)
+            if i == 1:
+                matB = chunksB
+            else:
+                matB = np.hstack((matB, chunksB))
+    
+    elif numWorkers <= l:
+        # agafar i desserialitzar chunks de A
+        for i in files:
+            chunkASer = ibm_cos.get_object(Bucket=bucket, Key='A'+str(i))['Body'].read()
+            chunksA = pickle.loads(chunkASer)
+            if i == 1:
+                matA = chunksB
+            else:
+                matA = np.hstack((matA, chunksA))
 
+        # agafar i desserialitzar chunks de A 
+        chunkBSer = ibm_cos.get_object(Bucket=bucket, Key='B'+str(col))['Body'].read()
+        matB.append(pickle.loads(chunkBSer))
+    
     # multiplicar chunks
-    '''
     chunkC = []
     i = 0
-    for fila in chunksA:
-        for colum in chunksB:
-            suma = np.dot(fila, colum) 
+    for i in range(len(matA)):
+        for j in range(len(matB[0])):
+            suma = np.dot(matA[i], matB[:,j]) 
             chunkC.append(suma) 
-    chunkC = np.array(chunkC).reshape(-1,len(colum))
-    '''
-    chunkC = []
-    i = 0
-    for i in range(len(chunksA)):
-        for j in range(len(chunksB[0])):
-            suma = np.dot(chunksA[i], chunksB[:,j]) 
-            chunkC.append(suma) 
-    chunkC = np.array(chunkC).reshape(len(chunksA),len(chunksB[0]))
+    chunkC = np.transpose(np.array(chunkC))
 
     partSer = pickle.dumps(chunkC)            # serialitzar i guardar
     ibm_cos.put_object(Bucket=bucket, Key='C'+str(files)+'1', Body=partSer)
+    
+    return [chunkC]
 
-    #return [chunkC] 
 
-def reduir():
+
+def reduir(results):
     # Agafar totes les parts de C, fer append i fer reshape (m,l) ????
-    return
+    if numWorkers <= m:
+        primer = True
+        for result in results:
+            if primer:
+                matC = result
+                primer = False
+            else:
+                matC = np.hstack((matC, result))
+    elif numWorkers <= l:
+        return
+    else:
+        return
+
+    return matC
 
 
 def getMat(bucket, ibm_cos):
@@ -158,7 +179,6 @@ if __name__ == '__main__':
                 interdata = [dict(files=1, col=1)]
                 ibmcf.map(multiplicar, interdata, extra_params={'bucket':'sd-python'})
             else:
-                # TODO Calcular interdata
                 interdata = []
                 if numWorkers <= m:          # partir en files
                     for i in range(numWorkers):
@@ -168,34 +188,32 @@ if __name__ == '__main__':
                         interdata.append(dict(files=list(range(1, numWorkers+1, 1)), col=i+1))
                 else:               # ???
                     print("NSE")
-                ibmcf.map(multiplicar, interdata, extra_params={'bucket':'sd-python'})
-                #ibmcf.map_reduce(multiplicar, interdata, reduir, extra_params={'bucket':'sd-python'})
+                
+                #ibmcf.map(multiplicar, interdata, extra_params={'bucket':'sd-python'})
+                ibmcf.map_reduce(multiplicar, interdata, reduir, extra_params={'bucket':'sd-python'})
             
-            ibmcf.call_async(getMat, 'sd-python')
+            #ibmcf.call_async(getMat, 'sd-python')
             
             result = ibmcf.get_result()
             print(result)
             miss = result[0][0]
             print("Missatge: "+str(miss))
+
             matA = result[0][1]
             print("Matriu A: ")
             print(matA)
+            print()
+
             matB = result[0][2]
             print("Matriu B: ")
             print(matB)
             print()
-            '''
-            matA = result[1][0]
-            print("Matriu A: ")
-            print(matA)
-            matB = result[1][1]
-            print("Matriu B: ")
-            print(matB)
-            '''
-            matC = result[1]
+
+            matC = result[1][0]
             print("Matriu C: ")
             print(matC)
             print()
+
             print("Interdata: "+str(interdata))
 
             ibmcf.clean()

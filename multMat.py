@@ -6,9 +6,9 @@ import pickle
 MAX_WORKERS = 100   # numero de workers maxim
 
 
-m = 4           # files de la matriu A
+m = 10           # files de la matriu A
 n = 4           # columnes de la matriu A // files de la matriu B
-l = 4           # columnes de la matriu B
+l = 10           # columnes de la matriu B
 
 numWorkers = 1
 
@@ -21,7 +21,7 @@ def inicialitzar(bucket, workers, ibm_cos):
         iniciA = 0
         finalA = 0
         for i in range(numWorkers):
-            iniciA = i * partA
+            iniciA = i * partA              # quines files agafar
             if (i == numWorkers - 1):            
                 finalA = m
             else:
@@ -33,27 +33,29 @@ def inicialitzar(bucket, workers, ibm_cos):
     else:
         for i in range(m):
             chunkA = matA[i]
+            chunkA = np.reshape(chunkA,(1,n))
             partSer = pickle.dumps(chunkA)          # serialitzar i guardar
             ibm_cos.put_object(Bucket=bucket, Key='A'+str(i+1), Body=partSer)
     
-
     if (numWorkers < l):    # Dividir matriu B
         partB = int(l/numWorkers)
         iniciB = 0
         finalB = 0
         for i in range(numWorkers):
-            iniciB = i * partB
+            iniciB = i * partB              # quines columnes agafar
             if (i == numWorkers - 1):            
                 finalB = m
             else:
                 finalB = (i+1) * partB
             
             chunkB = matB[:, iniciB:finalB]
+            #chunkB = np.reshape(chunkB,(n,-1))
             partSer = pickle.dumps(chunkB)          # serialitzar i guardar
             ibm_cos.put_object(Bucket=bucket, Key='B'+str(i+1), Body=partSer)
     else:
         for i in range(l):
             chunkB = matB[:, i]
+            chunkB = np.reshape(chunkB,(n,-1))
             partSer = pickle.dumps(chunkB)          # serialitzar i guardar
             ibm_cos.put_object(Bucket=bucket, Key='B'+str(i+1), Body=partSer)
 
@@ -61,7 +63,7 @@ def inicialitzar(bucket, workers, ibm_cos):
 
     
 
-def multiplicar(files, col, bucket, ibm_cos):
+def multiplicar(files, col, bucket, ibm_cos, id):
     
     matA = [] 
     chunksA = []
@@ -73,7 +75,7 @@ def multiplicar(files, col, bucket, ibm_cos):
         chunkBSer = ibm_cos.get_object(Bucket=bucket, Key='B1')['Body'].read()
         matB = pickle.loads(chunkBSer)
 
-    elif numWorkers <= m or numWorkers <= l:
+    else:
         # agafar i desserialitzar chunks de A 
         primer = True
         for i in files:
@@ -83,35 +85,32 @@ def multiplicar(files, col, bucket, ibm_cos):
                 matA = chunksA
                 primer = False
             else:
-                matA = np.stack((matA, chunksA))
+                matA = np.concatenate((matA, chunksA), axis=0)
         
         # agafar i desserialitzar chunks de B
         primer = True
         for j in col:
             chunkBSer = ibm_cos.get_object(Bucket=bucket, Key='B'+str(j))['Body'].read()
             chunksB = pickle.loads(chunkBSer)
-            chunksB = np.split(chunksB, len(chunksB)/n)
             if primer:
                 matB = chunksB
                 primer = False
-            else:                
-                matB = np.hstack((matB, chunksB))
-        #matB = np.transpose(matB)
-        # TODO falta posar be la matriu 
-    '''
+            else:
+                matB = np.concatenate((matB, chunksB), axis=1)
+    
     # multiplicar chunks
     chunkC = np.matmul(matA, matB)
 
     partSer = pickle.dumps(chunkC)            # serialitzar i guardar
-    ibm_cos.put_object(Bucket=bucket, Key='C'+str(files)+'1', Body=partSer)
-    '''
-    return [matA, matB]  
+    ibm_cos.put_object(Bucket=bucket, Key='C'+str(id+1), Body=partSer)
+    
+    return chunkC    
 
 
 
 def reduir(results):
-    # Agafar totes les parts de C, fer append i fer reshape (m,l) ????
-    if numWorkers <= m:
+    # Agafar totes les parts de C, fer append i fer reshape (m,l)
+    if numWorkers <= m or numWorkers <= l:
         primer = True
         for result in results:
             if primer:
@@ -119,8 +118,6 @@ def reduir(results):
                 primer = False
             else:
                 matC = np.append(matC, result)
-    elif numWorkers <= l:
-        return
     else:
         return
 
@@ -159,21 +156,26 @@ if __name__ == '__main__':
                 interdata = []
                 if numWorkers <= m:          # partir en files
                     if numWorkers <= l:
-                        for i in range(numWorkers):
-                            interdata.append(dict(files=[i+1], col=list(range(1, numWorkers+1, 1))))
+                        rang = numWorkers + 1
                     else:
-                        for i in range(numWorkers):
-                            interdata.append(dict(files=[i+1], col=list(range(1, l+1, 1))))
+                        rang = l + 1
+                    for i in range(numWorkers):
+                        interdata.append(dict(files=[i+1], col=list(range(1, rang, 1))))
 
                 elif numWorkers <= l:        # partir en col
+                    if numWorkers <= m:
+                        rang = numWorkers + 1
+                    else:
+                        rang = m + 1
                     for i in range(numWorkers):
-                        interdata.append(dict(files=list(range(1, m+1, 1)), col=i+1))
+                        interdata.append(dict(files=list(range(1, rang, 1)), col=[i+1]))
+
                 else:               # ???
                     print("NSE")
 
                 print("Interdata: "+str(interdata))
-                ibmcf.map(multiplicar, interdata, extra_params={'bucket':'sd-python'})
-                #ibmcf.map_reduce(multiplicar, interdata, reduir, extra_params={'bucket':'sd-python'})
+                #ibmcf.map(multiplicar, interdata, extra_params={'bucket':'sd-python'})
+                ibmcf.map_reduce(multiplicar, interdata, reduir, extra_params={'bucket':'sd-python'})
             
             #ibmcf.call_async(getMat, 'sd-python')
             

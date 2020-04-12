@@ -6,9 +6,9 @@ import pickle
 MAX_WORKERS = 100   # numero de workers maxim
 
 
-m = 10           # files de la matriu A
+m = 4           # files de la matriu A
 n = 4           # columnes de la matriu A // files de la matriu B
-l = 10           # columnes de la matriu B
+l = 4           # columnes de la matriu B
 
 numWorkers = 1
 
@@ -125,19 +125,6 @@ def reduir(results):
     return matC
 
 
-
-def getMat(bucket, ibm_cos):
-    partsC = []
-    for i in range(numWorkers):
-        part = pickle.loads(ibm_cos.get_object(Bucket=bucket, Key='C'+str(i+1)+'1')['Body'].read())
-        for j in part:
-            partsC.extend(j)
-    partsC = np.array(partsC).reshape(m,l)
-
-    return partsC
-
-
-
 if __name__ == '__main__':
     try:
         numWorkers = int(sys.argv[1])
@@ -147,8 +134,8 @@ if __name__ == '__main__':
         if (numWorkers > 0 and numWorkers <= MAX_WORKERS and numWorkers <= m*l):
             ibmcf = pywren.ibm_cf_executor()
             params = {'bucket': 'sd-python', 'workers': numWorkers}
-            ibmcf.call_async(inicialitzar, params)
-            ibmcf.wait()
+            #ibmcf.call_async(inicialitzar, params)
+            #ibmcf.wait()
             if(numWorkers == 1):
                 interdata = [dict(files=1, col=1)]
                 ibmcf.map(multiplicar, interdata, extra_params={'bucket':'sd-python'})
@@ -163,22 +150,40 @@ if __name__ == '__main__':
                         interdata.append(dict(files=[i+1], col=list(range(1, rang, 1))))
 
                 elif numWorkers <= l:        # partir en col
-                    if numWorkers <= m:
-                        rang = numWorkers + 1
-                    else:
-                        rang = m + 1
                     for i in range(numWorkers):
-                        interdata.append(dict(files=list(range(1, rang, 1)), col=[i+1]))
+                        interdata.append(dict(files=list(range(1, m+1, 1)), col=[i+1]))
 
                 else:               # ???
-                    print("NSE")
+                    fila = 1
+                    col = 1
+                    w = 1
+                    valors = []
+
+                    for _ in range(m*l):
+                        if len(valors) < w:
+                            valors.append(dict(files=[fila], col=[col]))
+                        else:
+                            elem = valors[w-1]
+                            elem['files'].append(fila)
+                            elem['col'].append(col)
+                        
+                        col += 1
+                        if col > l:
+                            fila += 1
+                            col = 1
+
+                        w += 1
+                        if w > numWorkers:
+                            w = 1
+
+                    for elem in valors:
+                        interdata.append(elem)                    
 
                 print("Interdata: "+str(interdata))
                 #ibmcf.map(multiplicar, interdata, extra_params={'bucket':'sd-python'})
-                ibmcf.map_reduce(multiplicar, interdata, reduir, extra_params={'bucket':'sd-python'})
+                #ibmcf.map_reduce(multiplicar, interdata, reduir, extra_params={'bucket':'sd-python'})
             
-            #ibmcf.call_async(getMat, 'sd-python')
-            
+            '''
             result = ibmcf.get_result()
             print(result)
 
@@ -196,7 +201,7 @@ if __name__ == '__main__':
             print("Matriu C: ")
             print(matC)
             print()
-            
+            '''
             ibmcf.clean()
         else:
             print("El nombre de workers ha de ser entre 0 i "+str(MAX_WORKERS))

@@ -75,7 +75,15 @@ def multiplicar(files, col, bucket, ibm_cos, id):
         chunkBSer = ibm_cos.get_object(Bucket=bucket, Key='B1')['Body'].read()
         matB = pickle.loads(chunkBSer)
 
-    else:
+        # multiplicar chunks
+        chunkC = np.matmul(matA, matB)
+
+        partSer = pickle.dumps(chunkC)            # serialitzar i guardar
+        ibm_cos.put_object(Bucket=bucket, Key='C'+str(id+1), Body=partSer)
+
+        return chunkC
+
+    elif numWorkers <= m or numWorkers <= l:
         # agafar i desserialitzar chunks de A 
         primer = True
         for i in files:
@@ -98,13 +106,29 @@ def multiplicar(files, col, bucket, ibm_cos, id):
             else:
                 matB = np.concatenate((matB, chunksB), axis=1)
     
-    # multiplicar chunks
-    chunkC = np.matmul(matA, matB)
+        # multiplicar chunks
+        chunkC = np.matmul(matA, matB)
 
-    partSer = pickle.dumps(chunkC)            # serialitzar i guardar
-    ibm_cos.put_object(Bucket=bucket, Key='C'+str(id+1), Body=partSer)
+        partSer = pickle.dumps(chunkC)            # serialitzar i guardar
+        ibm_cos.put_object(Bucket=bucket, Key='C'+str(id+1), Body=partSer)
+        
+        return chunkC
+
+    else:
+        retorn = []
+        for i in range(len(files)):
+            chunkASer = ibm_cos.get_object(Bucket=bucket, Key='A'+str(files[i]))['Body'].read()
+            matA = pickle.loads(chunkASer)
+            chunkBSer = ibm_cos.get_object(Bucket=bucket, Key='B'+str(col[i]))['Body'].read()
+            matB = pickle.loads(chunkBSer)
+
+            chunkC = np.dot(matA, matB)
+            retorn.append([[files[i],col[i]], chunkC])
+            partSer = pickle.dumps(chunkC)            # serialitzar i guardar
+            ibm_cos.put_object(Bucket=bucket, Key='C'+str(files[i])+str(col[i]), Body=partSer)
     
-    return chunkC    
+        return retorn
+        
 
 
 
@@ -118,10 +142,16 @@ def reduir(results):
                 primer = False
             else:
                 matC = np.append(matC, result)
+        matC = np.reshape(matC, (m, l))
     else:
-        return
-
-    matC = np.reshape(matC, (m, l))
+        matC = np.empty((m,l), np.int64)
+        for result in results:
+            for elem in result:
+                i = elem[0][0] - 1
+                j = elem[0][1] - 1
+                val = elem[1]
+                matC[i][j] = val
+    
     return matC
 
 
@@ -134,14 +164,14 @@ if __name__ == '__main__':
         if (numWorkers > 0 and numWorkers <= MAX_WORKERS and numWorkers <= m*l):
             ibmcf = pywren.ibm_cf_executor()
             params = {'bucket': 'sd-python', 'workers': numWorkers}
-            #ibmcf.call_async(inicialitzar, params)
-            #ibmcf.wait()
+            ibmcf.call_async(inicialitzar, params)
+            ibmcf.wait()
             if(numWorkers == 1):
                 interdata = [dict(files=1, col=1)]
                 ibmcf.map(multiplicar, interdata, extra_params={'bucket':'sd-python'})
             else:
                 interdata = []
-                if numWorkers <= m:          # partir en files
+                if numWorkers <= m:             # repartim els troços de la matriu C separant per files (mantenim la matriu B sencera)
                     if numWorkers <= l:
                         rang = numWorkers + 1
                     else:
@@ -149,11 +179,11 @@ if __name__ == '__main__':
                     for i in range(numWorkers):
                         interdata.append(dict(files=[i+1], col=list(range(1, rang, 1))))
 
-                elif numWorkers <= l:        # partir en col
+                elif numWorkers <= l:           # repartim els troços de la matriu C separant per columnes (mantenim la matriu A sencera)
                     for i in range(numWorkers):
                         interdata.append(dict(files=list(range(1, m+1, 1)), col=[i+1]))
 
-                else:               # ???
+                else:   #numWorkers > m,l       # repartim les posicions de la matriu C entre els workers
                     fila = 1
                     col = 1
                     w = 1
@@ -180,10 +210,11 @@ if __name__ == '__main__':
                         interdata.append(elem)                    
 
                 print("Interdata: "+str(interdata))
+
                 #ibmcf.map(multiplicar, interdata, extra_params={'bucket':'sd-python'})
-                #ibmcf.map_reduce(multiplicar, interdata, reduir, extra_params={'bucket':'sd-python'})
+                ibmcf.map_reduce(multiplicar, interdata, reduir, extra_params={'bucket':'sd-python'})
             
-            '''
+            
             result = ibmcf.get_result()
             print(result)
 
@@ -201,7 +232,7 @@ if __name__ == '__main__':
             print("Matriu C: ")
             print(matC)
             print()
-            '''
+            
             ibmcf.clean()
         else:
             print("El nombre de workers ha de ser entre 0 i "+str(MAX_WORKERS))

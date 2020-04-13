@@ -8,7 +8,7 @@ MAX_WORKERS = 100   # numero de workers maxim
 
 m = 4           # files de la matriu A
 n = 4           # columnes de la matriu A // files de la matriu B
-l = 4           # columnes de la matriu B
+l = 6           # columnes de la matriu B
 
 numWorkers = 1
 
@@ -44,7 +44,7 @@ def inicialitzar(bucket, workers, ibm_cos):
         for i in range(numWorkers):
             iniciB = i * partB              # quines columnes agafar
             if (i == numWorkers - 1):            
-                finalB = m
+                finalB = l
             else:
                 finalB = (i+1) * partB
             
@@ -125,7 +125,7 @@ def multiplicar(files, col, bucket, ibm_cos, id):
             chunkC = np.dot(matA, matB)
             retorn.append([[files[i],col[i]], chunkC])
             partSer = pickle.dumps(chunkC)            # serialitzar i guardar
-            ibm_cos.put_object(Bucket=bucket, Key='C'+str(files[i])+str(col[i]), Body=partSer)
+            ibm_cos.put_object(Bucket=bucket, Key='C'+str(files[i])+'-'+str(col[i]), Body=partSer)
     
         return retorn
         
@@ -156,83 +156,84 @@ def reduir(results):
 
 
 if __name__ == '__main__':
-    try:
-        numWorkers = int(sys.argv[1])
-    except IndexError:
-        print("S'ha d'indicar el nombre de workers")
-    else:
-        if (numWorkers > 0 and numWorkers <= MAX_WORKERS and numWorkers <= m*l):
-            ibmcf = pywren.ibm_cf_executor()
-            params = {'bucket': 'sd-python', 'workers': numWorkers}
-            ibmcf.call_async(inicialitzar, params)
-            ibmcf.wait()
-            if(numWorkers == 1):
-                interdata = [dict(files=1, col=1)]
-                ibmcf.map(multiplicar, interdata, extra_params={'bucket':'sd-python'})
-            else:
-                interdata = []
-                if numWorkers <= m:             # repartim els troços de la matriu C separant per files (mantenim la matriu B sencera)
-                    if numWorkers <= l:
-                        rang = numWorkers + 1
-                    else:
-                        rang = l + 1
-                    for i in range(numWorkers):
-                        interdata.append(dict(files=[i+1], col=list(range(1, rang, 1))))
-
-                elif numWorkers <= l:           # repartim els troços de la matriu C separant per columnes (mantenim la matriu A sencera)
-                    for i in range(numWorkers):
-                        interdata.append(dict(files=list(range(1, m+1, 1)), col=[i+1]))
-
-                else:   #numWorkers > m,l       # repartim les posicions de la matriu C entre els workers
-                    fila = 1
-                    col = 1
-                    w = 1
-                    valors = []
-
-                    for _ in range(m*l):
-                        if len(valors) < w:
-                            valors.append(dict(files=[fila], col=[col]))
-                        else:
-                            elem = valors[w-1]
-                            elem['files'].append(fila)
-                            elem['col'].append(col)
-                        
-                        col += 1
-                        if col > l:
-                            fila += 1
-                            col = 1
-
-                        w += 1
-                        if w > numWorkers:
-                            w = 1
-
-                    for elem in valors:
-                        interdata.append(elem)                    
-
-                print("Interdata: "+str(interdata))
-
-                #ibmcf.map(multiplicar, interdata, extra_params={'bucket':'sd-python'})
-                ibmcf.map_reduce(multiplicar, interdata, reduir, extra_params={'bucket':'sd-python'})
-            
-            
-            result = ibmcf.get_result()
-            print(result)
-
-            matA = result[0][0]
-            print("Matriu A: ")
-            print(matA)
-            print()
-
-            matB = result[0][1]
-            print("Matriu B: ")
-            print(matB)
-            print()
-            
-            matC = result[1]
-            print("Matriu C: ")
-            print(matC)
-            print()
-            
-            ibmcf.clean()
+    
+    while True:
+        print("\nIndicar el nombre de workers: ")
+        val = input()
+        try:
+            numWorkers = int(val)
+            if (numWorkers <= 0 or numWorkers > MAX_WORKERS or numWorkers > m*l):
+                print("El nombre de workers ha de ser entre 1 i "+str(MAX_WORKERS))
+        except ValueError:
+            print("El valor introduit NO es correcte")
         else:
-            print("El nombre de workers ha de ser entre 0 i "+str(MAX_WORKERS))
+            break
+
+    ibmcf = pywren.ibm_cf_executor()
+    params = {'bucket': 'sd-python', 'workers': numWorkers}
+    ibmcf.call_async(inicialitzar, params)
+    ibmcf.wait()
+    if(numWorkers == 1):
+        interdata = [dict(files=1, col=1)]
+        ibmcf.map(multiplicar, interdata, extra_params={'bucket':'sd-python'})
+    else:
+        interdata = []
+        if numWorkers <= m:             # repartim els troços de la matriu C separant per files (mantenim la matriu B sencera)
+            if numWorkers <= l:
+                rang = numWorkers + 1
+            else:
+                rang = l + 1
+            for i in range(numWorkers):
+                interdata.append(dict(files=[i+1], col=list(range(1, rang, 1))))
+
+        elif numWorkers <= l:           # repartim els troços de la matriu C separant per columnes (mantenim la matriu A sencera)
+            for i in range(numWorkers):
+                interdata.append(dict(files=list(range(1, m+1, 1)), col=[i+1]))
+
+        else:   #numWorkers > m,l --->  repartim les posicions de la matriu C entre els workers
+            fila = 1        # fila de la matriu C
+            col = 1         # columna de la matriu C
+            w = 1           # numero del worker
+            valors = []     # vector on es guardaran quantes posicion de la matriu C ha de calcular el worker
+
+            for _ in range(m*l):
+                if len(valors) < w:     # si el worker no te cap posicio assignada
+                    valors.append(dict(files=[fila], col=[col]))
+                else:                   # quan el worker ja te alguna posicio assignada
+                    elem = valors[w-1]
+                    elem['files'].append(fila)      # afegim la nova fila i columna necessaria per fer el calcul de la posicio 
+                    elem['col'].append(col)
+                
+                col += 1                # control de la fila i la columna
+                if col > l:
+                    fila += 1
+                    col = 1
+
+                w += 1                  # quan ja hem repartit a tots els workers, tornem a assignar al primer
+                if w > numWorkers:
+                    w = 1
+
+            interdata = valors.copy()   # copiem les posicions assignades a cada worker a la variable interdata         
+
+        ibmcf.map_reduce(multiplicar, interdata, reduir, extra_params={'bucket':'sd-python'})
+    
+    
+    result = ibmcf.get_result()     # obtenim els resultats 
+
+    matA = result[0][0]             # mostrem la matriu A
+    print("Matriu A: ")
+    print(matA)
+    print()
+
+    matB = result[0][1]             # mostrem la matriu B
+    print("Matriu B: ")
+    print(matB)
+    print()
+    
+    matC = result[1]                # mostrem la matriu C
+    print("Matriu C: ")
+    print(matC)
+    print()
+    
+    ibmcf.clean()
+    

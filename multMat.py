@@ -12,7 +12,7 @@ l = 6           # columnes de la matriu B
 
 numWorkers = 1
 
-def inicialitzar(bucket, workers, ibm_cos):
+def inicialitzar(bucket, ibm_cos):
     matA = np.random.randint(10, size=(m, n))
     matB = np.random.randint(10, size=(n, l))
     
@@ -21,7 +21,7 @@ def inicialitzar(bucket, workers, ibm_cos):
         iniciA = 0
         finalA = 0
         for i in range(numWorkers):
-            iniciA = i * partA              # quines files agafar
+            iniciA = i * partA              # trobar quines files corresponen a cada chunk
             if (i == numWorkers - 1):            
                 finalA = m
             else:
@@ -31,7 +31,7 @@ def inicialitzar(bucket, workers, ibm_cos):
             partSer = pickle.dumps(chunkA)          # serialitzar i guardar
             ibm_cos.put_object(Bucket=bucket, Key='A'+str(i+1), Body=partSer)
     else:
-        for i in range(m):
+        for i in range(m):          # separem cada fila
             chunkA = matA[i]
             chunkA = np.reshape(chunkA,(1,n))
             partSer = pickle.dumps(chunkA)          # serialitzar i guardar
@@ -42,18 +42,17 @@ def inicialitzar(bucket, workers, ibm_cos):
         iniciB = 0
         finalB = 0
         for i in range(numWorkers):
-            iniciB = i * partB              # quines columnes agafar
+            iniciB = i * partB              # trobar quines columnes corresponen a cada chunk
             if (i == numWorkers - 1):            
                 finalB = l
             else:
                 finalB = (i+1) * partB
             
             chunkB = matB[:, iniciB:finalB]
-            #chunkB = np.reshape(chunkB,(n,-1))
             partSer = pickle.dumps(chunkB)          # serialitzar i guardar
             ibm_cos.put_object(Bucket=bucket, Key='B'+str(i+1), Body=partSer)
     else:
-        for i in range(l):
+        for i in range(l):          # separem cada columna
             chunkB = matB[:, i]
             chunkB = np.reshape(chunkB,(n,-1))
             partSer = pickle.dumps(chunkB)          # serialitzar i guardar
@@ -70,44 +69,40 @@ def multiplicar(files, col, bucket, ibm_cos, id):
     chunksB = []
     matB = []
     if numWorkers == 1:
-        chunkASer = ibm_cos.get_object(Bucket=bucket, Key='A1')['Body'].read()
+        chunkASer = ibm_cos.get_object(Bucket=bucket, Key='A1')['Body'].read()      # desserialitzar matriu A
         matA = pickle.loads(chunkASer)
-        chunkBSer = ibm_cos.get_object(Bucket=bucket, Key='B1')['Body'].read()
+        chunkBSer = ibm_cos.get_object(Bucket=bucket, Key='B1')['Body'].read()      # desserialitzar matriu B
         matB = pickle.loads(chunkBSer)
 
-        # multiplicar chunks
-        chunkC = np.matmul(matA, matB)
+        chunkC = np.matmul(matA, matB)          # multiplicar les matrius
 
-        partSer = pickle.dumps(chunkC)            # serialitzar i guardar
+        partSer = pickle.dumps(chunkC)          # serialitzar i guardar
         ibm_cos.put_object(Bucket=bucket, Key='C'+str(id+1), Body=partSer)
 
         return chunkC
 
     elif numWorkers <= m or numWorkers <= l:
-        # agafar i desserialitzar chunks de A 
         primer = True
         for i in files:
-            chunkASer = ibm_cos.get_object(Bucket=bucket, Key='A'+str(i))['Body'].read()
+            chunkASer = ibm_cos.get_object(Bucket=bucket, Key='A'+str(i))['Body'].read()    # obtenir i desserialitzar chunks de A
             chunksA = pickle.loads(chunkASer)
-            if primer:
+            if primer:              # si és el primer chunk
                 matA = chunksA
                 primer = False
-            else:
+            else:                   # els següents chunks es concatenen a la següent fila
                 matA = np.concatenate((matA, chunksA), axis=0)
         
-        # agafar i desserialitzar chunks de B
         primer = True
         for j in col:
-            chunkBSer = ibm_cos.get_object(Bucket=bucket, Key='B'+str(j))['Body'].read()
+            chunkBSer = ibm_cos.get_object(Bucket=bucket, Key='B'+str(j))['Body'].read()    # obtenir i desserialitzar chunks de B
             chunksB = pickle.loads(chunkBSer)
-            if primer:
+            if primer:              # si és el primer chunk
                 matB = chunksB
                 primer = False
-            else:
+            else:                   # els següents chunks es concatenen a la següent columna
                 matB = np.concatenate((matB, chunksB), axis=1)
     
-        # multiplicar chunks
-        chunkC = np.matmul(matA, matB)
+        chunkC = np.matmul(matA, matB)      # multiplicar els chunks
 
         partSer = pickle.dumps(chunkC)            # serialitzar i guardar
         ibm_cos.put_object(Bucket=bucket, Key='C'+str(id+1), Body=partSer)
@@ -115,16 +110,16 @@ def multiplicar(files, col, bucket, ibm_cos, id):
         return chunkC
 
     else:
-        retorn = []
+        retorn = []     # paràmetres per la funció de reduir
         for i in range(len(files)):
-            chunkASer = ibm_cos.get_object(Bucket=bucket, Key='A'+str(files[i]))['Body'].read()
+            chunkASer = ibm_cos.get_object(Bucket=bucket, Key='A'+str(files[i]))['Body'].read()     # obtenir i desserialitzar fila
             matA = pickle.loads(chunkASer)
-            chunkBSer = ibm_cos.get_object(Bucket=bucket, Key='B'+str(col[i]))['Body'].read()
+            chunkBSer = ibm_cos.get_object(Bucket=bucket, Key='B'+str(col[i]))['Body'].read()       # obtenir i desserialitzar columna
             matB = pickle.loads(chunkBSer)
 
-            chunkC = np.dot(matA, matB)
-            retorn.append([[files[i],col[i]], chunkC])
-            partSer = pickle.dumps(chunkC)            # serialitzar i guardar
+            chunkC = np.dot(matA, matB)                 # multiplicar la fila per la columna
+            retorn.append([[files[i],col[i]], chunkC])  # afegeix la posició del valor i el valor
+            partSer = pickle.dumps(chunkC)              # serialitzar i guardar
             ibm_cos.put_object(Bucket=bucket, Key='C'+str(files[i])+'-'+str(col[i]), Body=partSer)
     
         return retorn
@@ -133,7 +128,6 @@ def multiplicar(files, col, bucket, ibm_cos, id):
 
 
 def reduir(results):
-    # Agafar totes les parts de C, fer append i fer reshape (m,l)
     if numWorkers <= m or numWorkers <= l:
         primer = True
         for result in results:
@@ -170,15 +164,15 @@ if __name__ == '__main__':
             break
 
     ibmcf = pywren.ibm_cf_executor()
-    params = {'bucket': 'sd-python', 'workers': numWorkers}
+    params = {'bucket':'sd-python'}
     ibmcf.call_async(inicialitzar, params)
     ibmcf.wait()
     if(numWorkers == 1):
         interdata = [dict(files=1, col=1)]
-        ibmcf.map(multiplicar, interdata, extra_params={'bucket':'sd-python'})
+        ibmcf.map(multiplicar, interdata, extra_params=params)
     else:
         interdata = []
-        if numWorkers <= m:             # repartim els troços de la matriu C separant per files (mantenim la matriu B sencera)
+        if numWorkers <= m:             # repartim els chunks de la matriu C separant per files (mantenim la matriu B sencera)
             if numWorkers <= l:
                 rang = numWorkers + 1
             else:
@@ -186,7 +180,7 @@ if __name__ == '__main__':
             for i in range(numWorkers):
                 interdata.append(dict(files=[i+1], col=list(range(1, rang, 1))))
 
-        elif numWorkers <= l:           # repartim els troços de la matriu C separant per columnes (mantenim la matriu A sencera)
+        elif numWorkers <= l:           # repartim els chunks de la matriu C separant per columnes (mantenim la matriu A sencera)
             for i in range(numWorkers):
                 interdata.append(dict(files=list(range(1, m+1, 1)), col=[i+1]))
 
@@ -215,7 +209,7 @@ if __name__ == '__main__':
 
             interdata = valors.copy()   # copiem les posicions assignades a cada worker a la variable interdata         
 
-        ibmcf.map_reduce(multiplicar, interdata, reduir, extra_params={'bucket':'sd-python'})
+        ibmcf.map_reduce(multiplicar, interdata, reduir, extra_params=params)
     
     
     result = ibmcf.get_result()     # obtenim els resultats 

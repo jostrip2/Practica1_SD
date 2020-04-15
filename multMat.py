@@ -163,9 +163,13 @@ if __name__ == '__main__':
         else:
             break
 
+    print("\nIndicar el nom del bucket: ")
+    val = input()
     ibmcf = pywren.ibm_cf_executor()
-    params = {'bucket':'sd-python'}
+    params = {'bucket':val}
     ibmcf.call_async(inicialitzar, params)
+        
+    
     ibmcf.wait()
     if(numWorkers == 1):
         interdata = [dict(files=1, col=1)]

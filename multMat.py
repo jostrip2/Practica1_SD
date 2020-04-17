@@ -6,9 +6,9 @@ import pickle
 MAX_WORKERS = 100   # numero de workers maxim
 
 
-m = 4           # files de la matriu A
-n = 4           # columnes de la matriu A // files de la matriu B
-l = 6           # columnes de la matriu B
+m = 10           # files de la matriu A
+n = 10           # columnes de la matriu A // files de la matriu B
+l = 10           # columnes de la matriu B
 
 numWorkers = 1
 
